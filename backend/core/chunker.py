@@ -138,13 +138,24 @@ def chunk_markdown_file(
     md = MarkdownIt("commonmark")
     tokens = md.parse(text)
 
-    # 找 H1（作为面包屑顶层）
-    h1: str | None = None
+    # 找所有 H1（作为面包屑顶层；可有多个，每个 H2 取上方最近的 H1）
+    h1_marks: list[tuple[int, str]] = []  # (line_index_0based, title)
     for i, t in enumerate(tokens):
         if t.type == "heading_open" and t.tag == "h1":
             inline = tokens[i + 1]
-            h1 = inline.content.strip()
-            break
+            line0 = t.map[0] if t.map else 0
+            h1_marks.append((line0, inline.content.strip()))
+    h1: str | None = h1_marks[0][1] if h1_marks else None
+
+    def _h1_for(line0: int) -> str | None:
+        """返回 line0 之上最近的 H1 标题。"""
+        latest: str | None = None
+        for hl, ht in h1_marks:
+            if hl <= line0:
+                latest = ht
+            else:
+                break
+        return latest
 
     # 找所有 H2 的位置（行号），作为分段锚点
     h2_marks: list[tuple[int, str]] = []  # (line_index_0based, title)
@@ -206,7 +217,8 @@ def chunk_markdown_file(
         body = "\n".join(body_lines).strip()
         if not body:
             continue
-        heading_path = [h1, title] if h1 else [title]
+        owning_h1 = _h1_for(line0)
+        heading_path = [owning_h1, title] if owning_h1 else [title]
         section_chunks = _emit_chunks(
             body=body,
             heading_path=heading_path,
