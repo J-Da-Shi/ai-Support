@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -5,7 +6,9 @@ import jieba
 import numpy as np
 from rank_bm25 import BM25Okapi
 
-from core.models import AskMode, Chunk, ScoredChunk
+from core.models import AskMode, ScoredChunk
+
+log = logging.getLogger(__name__)
 
 
 class _EmbProto(Protocol):
@@ -21,15 +24,6 @@ class RetrievalResult:
 
 def _tokenize(text: str) -> list[str]:
     return [t for t in jieba.lcut(text) if t.strip()]
-
-
-def _normalize(values: list[float]) -> list[float]:
-    if not values:
-        return values
-    lo, hi = min(values), max(values)
-    if hi - lo < 1e-9:
-        return [0.0 for _ in values]
-    return [(v - lo) / (hi - lo) for v in values]
 
 
 class Retriever:
@@ -64,7 +58,8 @@ class Retriever:
         # 向量召回
         try:
             qvec = (await self.embedder.embed([query]))[0]
-        except Exception:
+        except Exception as e:
+            log.warning("embedder failed; falling back to BM25-only: %s", e)
             qvec = None
 
         n = len(self.bundle.chunks)
@@ -80,6 +75,8 @@ class Retriever:
 
         # BM25 全量打分
         bm25_scores = self.bm25.get_scores(_tokenize(query))
+        # 语料级 BM25 最大值，用于稳定归一化（不依赖候选集）
+        bm25_max = float(max(bm25_scores)) if len(bm25_scores) else 0.0
 
         # 候选集 = 向量 top_k 与 bm25 top_k 的并集
         bm25_top_idx = np.argsort(bm25_scores)[::-1][: self.top_k].tolist()
@@ -88,14 +85,15 @@ class Retriever:
         vec_lookup = {i: s for i, s in vec_pairs}
         cand_vec = [vec_lookup.get(i, 0.0) for i in candidate_ids]
         cand_bm = [float(bm25_scores[i]) for i in candidate_ids]
-        nv = _normalize(cand_vec)
-        nb = _normalize(cand_bm)
+        # 稳定标度：余弦相似度 [-1,1] -> [0,1]；BM25 用语料级最大值归一化
+        nv = [(s + 1.0) / 2.0 for s in cand_vec]
+        nb = [b / bm25_max if bm25_max > 0 else 0.0 for b in cand_bm]
         mixed = [
             self.vector_weight * v + self.bm25_weight * b
             for v, b in zip(nv, nb)
         ]
 
-        order = sorted(range(len(candidate_ids)), key=lambda k: mixed[k], reverse=True)
+        order = sorted(range(len(candidate_ids)), key=lambda i: mixed[i], reverse=True)
         top = order[: self.rerank_top_k]
         scored = [
             ScoredChunk(
