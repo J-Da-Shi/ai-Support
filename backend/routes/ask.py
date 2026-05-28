@@ -14,8 +14,7 @@ router = APIRouter()
 
 
 def _sse(event: str, data) -> bytes:
-    payload = json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else json.dumps(data, ensure_ascii=False)
-    return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
 @router.get("/api/ask")
@@ -24,9 +23,18 @@ async def ask(request: Request, query: str):
     retriever = request.app.state.retriever
     llm = request.app.state.llm
     resume_text: str = request.app.state.resume_text
+    config_error = getattr(request.app.state, "config_error", None)
 
     async def gen():
         t0 = time.monotonic()
+        if retriever is None or llm is None or config_error:
+            yield _sse("error", {
+                "stage": "config",
+                "message": config_error or "Service not configured",
+                "recoverable": False,
+            })
+            yield _sse("done", {})
+            return
         try:
             result = await retriever.search(query)
         except Exception as e:

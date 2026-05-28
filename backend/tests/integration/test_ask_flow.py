@@ -100,3 +100,45 @@ def test_ask_fallback_flow(tmp_path):
     mode_ev = next(d for e, d in events if e == "mode")
     assert json.loads(mode_ev)["mode"] == "fallback"
     assert any(e == "token" for e, _ in events)
+
+
+def test_health_reports_config_error_when_keys_missing(monkeypatch):
+    # Build a fresh app, run real lifespan with empty keys; expect 200 + config_error
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # need a fresh import of main so lifespan picks up env
+    import sys
+    if "main" in sys.modules:
+        del sys.modules["main"]
+    import main  # noqa: E402
+    with TestClient(main.app) as c:
+        r = c.get("/api/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is False
+        assert "API_KEY" in (body.get("config_error") or "")
+
+
+def test_ask_returns_config_error_when_degraded(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    import sys
+    if "main" in sys.modules:
+        del sys.modules["main"]
+    import main  # noqa: E402
+    with TestClient(main.app) as c:
+        with c.stream("GET", "/api/ask", params={"query": "x"}) as r:
+            text = "".join(r.iter_text())
+    events = _parse_sse(text)
+    types = [e for e, _ in events]
+    assert "error" in types
+    err_data = next(d for e, d in events if e == "error")
+    import json
+    assert json.loads(err_data)["stage"] == "config"

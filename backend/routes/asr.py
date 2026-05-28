@@ -10,6 +10,9 @@ router = APIRouter()
 async def asr(request: Request, file: UploadFile = File(...)):
     settings = request.app.state.settings
     asr_client = request.app.state.asr
+    config_error = getattr(request.app.state, "config_error", None)
+    if asr_client is None:
+        raise HTTPException(status_code=503, detail=f"ASR unavailable: {config_error or 'not configured'}")
     try:
         audio = await file.read()
         from io import BytesIO
