@@ -25,3 +25,10 @@ async def test_whisper_raises_on_error():
     asr = WhisperASR(api_key="sk", model="whisper-1")
     with pytest.raises(RuntimeError, match="Whisper"):
         await asr.transcribe(io.BytesIO(b"\x00"), filename="a.webm", mime="audio/webm")
+
+
+def test_whisper_accepts_timeout_param():
+    asr = WhisperASR(api_key="sk", model="whisper-1", timeout=5.0)
+    assert asr.timeout == 5.0
+    asr2 = WhisperASR(api_key="sk", model="whisper-1")
+    assert asr2.timeout == 30.0
