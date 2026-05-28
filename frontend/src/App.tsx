@@ -42,7 +42,16 @@ export default function App() {
         </section>
         <section className="overflow-auto bg-zinc-100 rounded-lg p-3">
           <h2 className="text-xs uppercase text-zinc-500 mb-2">延展 / 简历兜底</h2>
-          <SummaryPane mode={state.mode} summary={state.summary} status={state.status} />
+          <SummaryPane
+            mode={state.mode}
+            summary={state.summary}
+            status={state.status}
+            forced={state.forced}
+            lastQuery={state.lastQuery}
+            onAskResume={() => {
+              if (state.lastQuery) ask(state.lastQuery, "resume");
+            }}
+          />
         </section>
       </main>
       <Toast message={toast} onClose={() => setToast(null)} />

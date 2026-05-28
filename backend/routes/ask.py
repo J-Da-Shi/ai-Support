@@ -18,12 +18,18 @@ def _sse(event: str, data) -> bytes:
 
 
 @router.get("/api/ask")
-async def ask(request: Request, query: str):
+async def ask(request: Request, query: str, mode_override: str | None = None):
+    """SSE retrieval + LLM stream.
+
+    `mode_override="resume"` forces the resume-grounded fallback prompt
+    regardless of retrieval score, for the front-end "基于简历回答" button.
+    """
     settings = request.app.state.settings
     retriever = request.app.state.retriever
     llm = request.app.state.llm
     resume_text: str = request.app.state.resume_text
     config_error = getattr(request.app.state, "config_error", None)
+    force_resume = mode_override == "resume"
 
     async def gen():
         t0 = time.monotonic()
@@ -43,7 +49,13 @@ async def ask(request: Request, query: str):
             return
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
-        yield _sse("mode", {"mode": result.mode.value, "top1_score": result.top1_score, "elapsed_ms": elapsed_ms})
+        effective_mode = AskMode.FALLBACK if force_resume else result.mode
+        yield _sse("mode", {
+            "mode": effective_mode.value,
+            "top1_score": result.top1_score,
+            "elapsed_ms": elapsed_ms,
+            "forced": force_resume,
+        })
         yield _sse("chunks", [
             {
                 "id": sc.chunk.id,
@@ -57,7 +69,17 @@ async def ask(request: Request, query: str):
             for sc in result.chunks
         ])
 
-        if result.mode == AskMode.EMPTY:
+        if force_resume:
+            if not resume_text:
+                yield _sse("error", {
+                    "stage": "config",
+                    "message": "未配置简历（resume.md），无法基于简历生成回答",
+                    "recoverable": False,
+                })
+                yield _sse("done", {"elapsed_ms": int((time.monotonic() - t0) * 1000)})
+                return
+            prompt = fallback_prompt(query, resume_text, result.chunks)
+        elif result.mode == AskMode.EMPTY:
             if not resume_text:
                 yield _sse("done", {"elapsed_ms": int((time.monotonic() - t0) * 1000)})
                 return
