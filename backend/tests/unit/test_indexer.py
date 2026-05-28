@@ -1,5 +1,5 @@
+import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock
 import pytest
 
 from core.indexer import build_or_update_index, IndexBundle
@@ -112,3 +112,32 @@ async def test_changing_embedder_model_forces_reembed(tmp_path):
     # 即使没有文件改变，也应该因为 model 变化而全部重新 embed
     assert embedder_b.calls > 0
     assert bundle.faiss_index.ntotal == len(bundle.chunks)
+
+
+def test_atomic_writes_leave_no_tmp_files(tmp_path):
+    """构建索引后，data_dir 不应残留任何 .tmp 文件（原子写应已 rename 到位）。"""
+    notes = Path(__file__).parent.parent / "fixtures" / "notes_sample"
+    data_dir = tmp_path / "data"
+    embedder = FakeEmbedder()
+
+    bundle = asyncio.run(
+        build_or_update_index(
+            notes_dir=notes,
+            data_dir=data_dir,
+            embedder=embedder,
+            max_tokens=500,
+            overlap_tokens=50,
+        )
+    )
+    assert isinstance(bundle, IndexBundle)
+
+    leftovers = sorted(p.name for p in data_dir.iterdir() if p.suffix == ".tmp")
+    assert leftovers == [], f"Found leftover .tmp files: {leftovers}"
+
+    names = {p.name for p in data_dir.iterdir()}
+    # 三个核心持久化文件必须就位；embedding_cache.json 来自 embedder（此处用 FakeEmbedder 不会产生）
+    assert {"index.pkl", "chunks.json", "meta.json"}.issubset(names)
+    # 除允许的文件外，不应再有未知产物
+    allowed = {"index.pkl", "chunks.json", "meta.json", "embedding_cache.json"}
+    unknown = names - allowed
+    assert unknown == set(), f"Unexpected files in data_dir: {unknown}"

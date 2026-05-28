@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import pickle
 import time
 from dataclasses import asdict
@@ -15,6 +16,21 @@ from core.chunker import chunk_markdown_file
 from core.config import load_settings
 from core.embedder import OpenAIEmbedder
 from core.models import Chunk
+
+log = logging.getLogger(__name__)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
+
+
+def _atomic_write_bytes_via_pickle(path: Path, payload) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "wb") as f:
+        pickle.dump(payload, f)
+    tmp.replace(path)
 
 
 class _EmbProto(Protocol):
@@ -95,7 +111,11 @@ async def build_or_update_index(
                 for c, vec in zip(old_payload["chunks"], old_payload["vectors"]):
                     reuse_vectors[c["id"]] = vec
             else:
-                print(f"Embedding model changed (old={old_model}, new={current_model}); rebuilding all vectors")
+                log.warning(
+                    "Embedding model changed (old=%s, new=%s); rebuilding all vectors",
+                    old_model,
+                    current_model,
+                )
         except Exception:
             reuse_vectors = {}
 
@@ -124,10 +144,17 @@ async def build_or_update_index(
     if not new_chunks:
         index = faiss.IndexFlatIP(1)
         bundle = IndexBundle(index, [], meta.get("embedding_model", ""))
-        meta_path.write_text(json.dumps({"files_hash": current_hash, "embedding_model": "", "last_indexed_at": int(time.time())}), encoding="utf-8")
-        chunks_path.write_text(json.dumps([], ensure_ascii=False), encoding="utf-8")
-        with open(index_path, "wb") as f:
-            pickle.dump({"chunks": [], "vectors": []}, f)
+        # 先写 index/chunks，再写 meta —— 中途崩溃时 meta 仍与磁盘旧状态一致，下次重建即可
+        _atomic_write_bytes_via_pickle(index_path, {"chunks": [], "vectors": []})
+        _atomic_write_text(chunks_path, json.dumps([], ensure_ascii=False))
+        _atomic_write_text(
+            meta_path,
+            json.dumps({
+                "files_hash": current_hash,
+                "embedding_model": current_model,
+                "last_indexed_at": int(time.time()),
+            }),
+        )
         return bundle
 
     matrix = np.array([reuse_vectors[c.id] for c in new_chunks], dtype="float32")
@@ -135,20 +162,19 @@ async def build_or_update_index(
     index = faiss.IndexFlatIP(matrix.shape[1])
     index.add(matrix)
 
-    # 持久化
-    with open(index_path, "wb") as f:
-        pickle.dump(
-            {"chunks": [asdict(c) for c in new_chunks], "vectors": matrix.tolist()},
-            f,
-        )
-    chunks_path.write_text(json.dumps([asdict(c) for c in new_chunks], ensure_ascii=False), encoding="utf-8")
-    meta_path.write_text(
+    # 持久化：先写 index/chunks，再写 meta —— meta 是“真相之锚”
+    _atomic_write_bytes_via_pickle(
+        index_path,
+        {"chunks": [asdict(c) for c in new_chunks], "vectors": matrix.tolist()},
+    )
+    _atomic_write_text(chunks_path, json.dumps([asdict(c) for c in new_chunks], ensure_ascii=False))
+    _atomic_write_text(
+        meta_path,
         json.dumps({
             "files_hash": current_hash,
             "embedding_model": current_model,
             "last_indexed_at": int(time.time()),
         }),
-        encoding="utf-8",
     )
     return IndexBundle(index, new_chunks, current_model)
 
@@ -164,6 +190,10 @@ def load_index(data_dir: Path) -> IndexBundle | None:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except Exception:
         # 备份损坏文件
+        backup = index_path.with_suffix(f".broken-{int(time.time())}")
+        index_path.rename(backup)
+        return None
+    if len(payload["chunks"]) != len(payload.get("vectors", [])):
         backup = index_path.with_suffix(f".broken-{int(time.time())}")
         index_path.rename(backup)
         return None
