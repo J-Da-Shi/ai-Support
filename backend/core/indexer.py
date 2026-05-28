@@ -83,13 +83,19 @@ async def build_or_update_index(
     chunks_to_embed: list[Chunk] = []
     reuse_vectors: dict[str, list[float]] = {}
 
-    # 加载旧向量 → reuse 池
+    current_model = getattr(embedder, "model", "")
+
+    # 加载旧向量 → reuse 池（仅当 embedding model 一致）
     if index_path.exists():
         try:
             with open(index_path, "rb") as f:
                 old_payload = pickle.load(f)
-            for c, vec in zip(old_payload["chunks"], old_payload["vectors"]):
-                reuse_vectors[c["id"]] = vec
+            old_model = meta.get("embedding_model")
+            if old_model == current_model:
+                for c, vec in zip(old_payload["chunks"], old_payload["vectors"]):
+                    reuse_vectors[c["id"]] = vec
+            else:
+                print(f"Embedding model changed (old={old_model}, new={current_model}); rebuilding all vectors")
         except Exception:
             reuse_vectors = {}
 
@@ -99,6 +105,8 @@ async def build_or_update_index(
         if unchanged:
             for c in old_chunks_by_file[rel]:
                 new_chunks.append(c)
+                if c.id not in reuse_vectors:
+                    chunks_to_embed.append(c)
         else:
             for c in chunk_markdown_file(p, rel, max_tokens, overlap_tokens):
                 new_chunks.append(c)
@@ -137,12 +145,12 @@ async def build_or_update_index(
     meta_path.write_text(
         json.dumps({
             "files_hash": current_hash,
-            "embedding_model": getattr(embedder, "model", ""),
+            "embedding_model": current_model,
             "last_indexed_at": int(time.time()),
         }),
         encoding="utf-8",
     )
-    return IndexBundle(index, new_chunks, getattr(embedder, "model", ""))
+    return IndexBundle(index, new_chunks, current_model)
 
 
 def load_index(data_dir: Path) -> IndexBundle | None:

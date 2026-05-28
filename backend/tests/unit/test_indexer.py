@@ -6,6 +6,8 @@ from core.indexer import build_or_update_index, IndexBundle
 
 
 class FakeEmbedder:
+    model = "fake-embedding"
+
     def __init__(self):
         self.calls = 0
     async def embed(self, texts):
@@ -77,3 +79,36 @@ async def test_modified_file_reindexes(tmp_path):
 
     bundle2 = await build_or_update_index(notes, data_dir, embedder, 500, 50)
     assert len(bundle2.chunks) == n1 + 1
+
+
+class FakeEmbedderB:
+    model = "fake-b"
+
+    def __init__(self):
+        self.calls = 0
+    async def embed(self, texts):
+        self.calls += 1
+        out = []
+        for t in texts:
+            h = hash(t)
+            v = [float((h >> i) & 1) for i in range(1536)]
+            out.append(v)
+        return out
+
+
+@pytest.mark.asyncio
+async def test_changing_embedder_model_forces_reembed(tmp_path):
+    notes = Path(__file__).parent.parent / "fixtures" / "notes_sample"
+    data_dir = tmp_path / "data"
+
+    embedder_a = FakeEmbedder()
+    embedder_a.model = "fake-a"
+    await build_or_update_index(notes, data_dir, embedder_a, 500, 50)
+    assert embedder_a.calls > 0
+
+    embedder_b = FakeEmbedderB()
+    bundle = await build_or_update_index(notes, data_dir, embedder_b, 500, 50)
+
+    # 即使没有文件改变，也应该因为 model 变化而全部重新 embed
+    assert embedder_b.calls > 0
+    assert bundle.faiss_index.ntotal == len(bundle.chunks)
