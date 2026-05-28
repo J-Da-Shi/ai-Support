@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# 数据与日志
+backend/data/
+backend/logs/
+frontend/dist/
+
+# 用户内容
+notes/
+resume.md
+.env
+.env.local
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
