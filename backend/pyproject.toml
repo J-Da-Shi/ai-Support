@@ -17,6 +17,7 @@ dependencies = [
   "anthropic>=0.40",
   "tiktoken>=0.8",
   "numpy>=1.26",
+  "python-multipart>=0.0.20",
 ]
 
 [project.optional-dependencies]
@@ -29,3 +30,6 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["core*", "routes*"]
+
+[tool.setuptools]
+py-modules = ["main"]
