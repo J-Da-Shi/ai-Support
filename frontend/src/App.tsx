@@ -6,12 +6,8 @@ import { Toast } from "./components/Toast";
 import { useAsk } from "./hooks/useAsk";
 
 export default function App() {
-  const { state, ask, reset } = useAsk();
   const [toast, setToast] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (state.status === "error" && state.errorMessage) setToast(state.errorMessage);
-  }, [state.status, state.errorMessage]);
+  const { state, ask, reset } = useAsk({ onError: setToast });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AskMode, ChunkPayload } from "../types";
 
 export interface AskState {
@@ -11,11 +11,19 @@ export interface AskState {
   elapsedMs?: number;
 }
 
+export interface UseAskOptions {
+  onError?: (msg: string) => void;
+}
+
 const initial: AskState = { mode: null, top1Score: null, chunks: [], summary: "", status: "idle" };
 
-export function useAsk() {
+export function useAsk(options: UseAskOptions = {}) {
   const [state, setState] = useState<AskState>(initial);
   const sourceRef = useRef<EventSource | null>(null);
+  const onErrorRef = useRef(options.onError);
+  useEffect(() => {
+    onErrorRef.current = options.onError;
+  }, [options.onError]);
 
   const abort = useCallback(() => {
     sourceRef.current?.close();
@@ -45,19 +53,27 @@ export function useAsk() {
       const raw = (e as MessageEvent).data;
       let msg = "连接错误";
       if (raw) {
-        try { msg = JSON.parse(raw).message ?? msg; } catch {}
+        try { msg = JSON.parse(raw).message ?? msg; } catch { /* keep default msg */ }
       }
+      onErrorRef.current?.(msg);
       setState((s) => ({ ...s, status: "error", errorMessage: msg }));
       es.close();
+      sourceRef.current = null;
     });
     es.addEventListener("done", (e) => {
       const d = JSON.parse((e as MessageEvent).data || "{}");
       setState((s) => ({ ...s, status: "done", elapsedMs: d.elapsed_ms }));
       es.close();
+      sourceRef.current = null;
     });
     es.onerror = () => {
-      setState((s) => (s.status === "done" ? s : { ...s, status: "error", errorMessage: "SSE 中断" }));
+      setState((s) => {
+        if (s.status === "done") return s;
+        onErrorRef.current?.("SSE 中断");
+        return { ...s, status: "error", errorMessage: "SSE 中断" };
+      });
       es.close();
+      sourceRef.current = null;
     };
   }, [abort]);
 
