@@ -17,8 +17,6 @@ backend/logs/
 frontend/dist/
 
 # 用户内容
-notes/
-resume.md
 .env
 .env.local
 
