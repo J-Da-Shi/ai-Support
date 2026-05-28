@@ -24,6 +24,25 @@ async def test_deepseek_streams_tokens():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_deepseek_skips_empty_choices_frames():
+    body = (
+        b'data: {"choices":[]}\n\n'                                    # empty list, must not crash
+        b'data: {}\n\n'                                                # missing key
+        b'data: {"choices":[{"delta":{"content":"\xe4\xb8\xad"}}]}\n\n'  # 中
+        b'data: [DONE]\n\n'
+    )
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+    )
+    provider = DeepSeekProvider(api_key="dk", model="deepseek-chat")
+    out = []
+    async for tok in provider.stream("hi"):
+        out.append(tok)
+    assert "".join(out) == "中"
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_deepseek_handles_http_error():
     respx.post("https://api.deepseek.com/chat/completions").mock(
         return_value=httpx.Response(500, text="boom")

@@ -22,6 +22,7 @@ class DeepSeekProvider:
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
         }
+        # timeout=None: timeouts are enforced at the route layer via asyncio.wait_for
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", self.BASE_URL, headers=headers, json=payload) as resp:
                 if resp.status_code >= 400:
@@ -37,10 +38,7 @@ class DeepSeekProvider:
                         obj = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    delta = (
-                        obj.get("choices", [{}])[0]
-                        .get("delta", {})
-                        .get("content")
-                    )
+                    choices = obj.get("choices") or [{}]
+                    delta = choices[0].get("delta", {}).get("content")
                     if delta:
                         yield delta
