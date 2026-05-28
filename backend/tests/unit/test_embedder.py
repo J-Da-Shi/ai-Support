@@ -50,3 +50,33 @@ async def test_embed_partial_cache_hit(tmp_path):
     assert out == [[1.0], [3.0]]
     fake_client.create.assert_awaited_once()
     assert fake_client.create.call_args.kwargs["input"] == ["c"]
+
+
+@pytest.mark.asyncio
+async def test_embed_cache_write_is_atomic_on_crash(tmp_path):
+    """A crash during the OpenAI call must not corrupt the on-disk cache."""
+    cache = tmp_path / "cache.json"
+    fake_client = AsyncMock()
+    # 第一轮：成功写入一个条目
+    fake_client.create = AsyncMock(return_value=type("R", (), {
+        "data": [type("E", (), {"embedding": [9.9]})()]
+    })())
+    emb = OpenAIEmbedder(api_key="sk", model="m", cache_path=cache, _client=fake_client, batch_size=10)
+    await emb.embed(["a"])
+
+    # 快照旧内容
+    original_bytes = cache.read_bytes()
+    original_parsed = json.loads(original_bytes)
+    assert len(original_parsed) == 1
+
+    # 第二轮：模拟 create 抛异常
+    fake_client.create = AsyncMock(side_effect=RuntimeError("boom"))
+    with pytest.raises(RuntimeError):
+        await emb.embed(["b"])
+
+    # 磁盘上的 cache.json 仍然完好可解析，并保留了原有 "a" 条目
+    assert cache.exists()
+    after_bytes = cache.read_bytes()
+    assert after_bytes == original_bytes
+    after_parsed = json.loads(after_bytes)
+    assert after_parsed == original_parsed

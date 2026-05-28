@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -57,6 +56,8 @@ class OpenAIEmbedder:
 
         if misses:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            self.cache_path.write_text(json.dumps(self._cache), encoding="utf-8")
+            tmp = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(self._cache), encoding="utf-8")
+            tmp.replace(self.cache_path)
 
         return [r for r in results]  # type: ignore[return-value]
