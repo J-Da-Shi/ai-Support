@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Protocol
@@ -36,6 +37,7 @@ class Retriever:
         threshold: float,
         vector_weight: float,
         bm25_weight: float,
+        embed_timeout: float | None = None,
     ):
         self.bundle = bundle
         self.embedder = embedder
@@ -44,6 +46,7 @@ class Retriever:
         self.threshold = threshold
         self.vector_weight = vector_weight
         self.bm25_weight = bm25_weight
+        self.embed_timeout = embed_timeout
 
         if bundle.chunks:
             corpus = [_tokenize(c.text) for c in bundle.chunks]
@@ -51,16 +54,37 @@ class Retriever:
         else:
             self.bm25 = None
 
+    async def _embed_query_with_retry(self, query: str) -> list[float] | None:
+        """Spec §7: 1 retry with 200ms backoff. Returns None on final failure -> BM25 fallback."""
+        attempt_timeout = self.embed_timeout
+        for attempt in (1, 2):
+            try:
+                coro = self.embedder.embed([query])
+                if attempt_timeout:
+                    result = await asyncio.wait_for(coro, timeout=attempt_timeout)
+                else:
+                    result = await coro
+                return result[0]
+            except asyncio.TimeoutError:
+                if attempt == 2:
+                    log.warning("embedder timeout after %d attempts; falling back to BM25", attempt)
+                    return None
+                log.info("embedder timeout, retrying after 200ms")
+                await asyncio.sleep(0.2)
+            except Exception as e:
+                if attempt == 2:
+                    log.warning("embedder failed after %d attempts; falling back to BM25: %s", attempt, e)
+                    return None
+                log.info("embedder error, retrying after 200ms: %s", e)
+                await asyncio.sleep(0.2)
+        return None
+
     async def search(self, query: str) -> RetrievalResult:
         if not self.bundle.chunks or self.bm25 is None:
             return RetrievalResult(AskMode.EMPTY, [], 0.0)
 
-        # 向量召回
-        try:
-            qvec = (await self.embedder.embed([query]))[0]
-        except Exception as e:
-            log.warning("embedder failed; falling back to BM25-only: %s", e)
-            qvec = None
+        # 向量召回（带超时与一次重试；失败/超时降级 BM25-only）
+        qvec = await self._embed_query_with_retry(query)
 
         n = len(self.bundle.chunks)
         if qvec is not None:

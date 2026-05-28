@@ -68,6 +68,7 @@ async def lifespan(app: FastAPI):
             threshold=settings.retrieval_threshold,
             vector_weight=settings.vector_weight,
             bm25_weight=settings.bm25_weight,
+            embed_timeout=settings.embed_timeout_s,
         )
         llm = build_provider(settings.llm_provider, api_key=_provider_api_key(settings), model=settings.llm_model)
         asr_client = WhisperASR(

@@ -114,3 +114,59 @@ async def test_retriever_empty_when_no_chunks(tmp_path):
     res = await r.search("anything")
     assert res.mode == AskMode.EMPTY
     assert res.chunks == []
+
+
+@pytest.mark.asyncio
+async def test_retriever_embed_timeout_falls_back_to_bm25(tmp_path):
+    notes = Path(__file__).parent.parent / "fixtures" / "notes_sample"
+
+    class SlowEmbedder:
+        model = "m"
+        async def embed(self, texts):
+            import asyncio
+            await asyncio.sleep(2)  # exceeds timeout
+            return [[0.0] * 1536 for _ in texts]
+
+    fast_embedder = FakeEmbedder()
+    bundle = await build_or_update_index(notes, tmp_path / "data", fast_embedder, 500, 50)
+    slow = SlowEmbedder()
+
+    r = Retriever(
+        bundle=bundle, embedder=slow,
+        top_k=8, rerank_top_k=3, threshold=0.0,
+        vector_weight=0.0, bm25_weight=1.0,
+        embed_timeout=0.1,  # 100ms timeout
+    )
+    res = await r.search("RR vs RC")
+    # Should still get BM25-driven results
+    assert res.mode == AskMode.HIT
+    assert any("事务隔离" in sc.chunk.file_path for sc in res.chunks)
+
+
+@pytest.mark.asyncio
+async def test_retriever_embed_retry_then_succeeds(tmp_path):
+    notes = Path(__file__).parent.parent / "fixtures" / "notes_sample"
+
+    fast_embedder = FakeEmbedder()
+    bundle = await build_or_update_index(notes, tmp_path / "data", fast_embedder, 500, 50)
+
+    class FlakeyEmbedder:
+        model = "m"
+        def __init__(self):
+            self.calls = 0
+        async def embed(self, texts):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient")
+            return [[1.0] * 1536 for _ in texts]
+
+    flakey = FlakeyEmbedder()
+    r = Retriever(
+        bundle=bundle, embedder=flakey,
+        top_k=8, rerank_top_k=3, threshold=0.0,
+        vector_weight=0.5, bm25_weight=0.5,
+        embed_timeout=2.0,
+    )
+    res = await r.search("RR vs RC")
+    assert flakey.calls == 2  # retried after first failure
+    assert res.chunks  # got results

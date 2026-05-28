@@ -141,3 +141,38 @@ def test_atomic_writes_leave_no_tmp_files(tmp_path):
     allowed = {"index.pkl", "chunks.json", "meta.json", "embedding_cache.json"}
     unknown = names - allowed
     assert unknown == set(), f"Unexpected files in data_dir: {unknown}"
+
+
+@pytest.mark.asyncio
+async def test_indexer_retries_embedder_failures(tmp_path):
+    """Indexer should retry transient embedder failures up to 3 times."""
+    notes = Path(__file__).parent.parent / "fixtures" / "notes_sample"
+
+    class FlakeyEmbedder:
+        model = "fake"
+        def __init__(self):
+            self.calls = 0
+        async def embed(self, texts):
+            self.calls += 1
+            if self.calls < 3:
+                raise RuntimeError(f"transient failure {self.calls}")
+            return [[float(i) for i in range(1536)] for _ in texts]
+
+    flakey = FlakeyEmbedder()
+    bundle = await build_or_update_index(notes, tmp_path / "data", flakey, 500, 50)
+    assert flakey.calls == 3  # first 2 failed, 3rd succeeded
+    assert len(bundle.chunks) > 0
+    assert bundle.faiss_index.ntotal == len(bundle.chunks)
+
+
+@pytest.mark.asyncio
+async def test_indexer_raises_after_3_retries(tmp_path):
+    notes = Path(__file__).parent.parent / "fixtures" / "notes_sample"
+
+    class AlwaysFailingEmbedder:
+        model = "fake"
+        async def embed(self, texts):
+            raise RuntimeError("permanent failure")
+
+    with pytest.raises(RuntimeError, match="Embedding failed"):
+        await build_or_update_index(notes, tmp_path / "data", AlwaysFailingEmbedder(), 500, 50)

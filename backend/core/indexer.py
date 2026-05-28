@@ -37,6 +37,23 @@ class _EmbProto(Protocol):
     async def embed(self, texts): ...
 
 
+async def _embed_with_retry(embedder: "_EmbProto", texts: list[str]) -> list[list[float]] | None:
+    """Spec §7 index-time policy: 3 retries with exponential backoff (0.5/1.0/2.0s).
+    Returns None on final failure."""
+    delay = 0.5
+    for attempt in (1, 2, 3, 4):  # initial + 3 retries
+        try:
+            return await embedder.embed(texts)
+        except Exception as e:
+            if attempt == 4:
+                log.warning("embedder failed after %d attempts; giving up: %s", attempt, e)
+                return None
+            log.info("embedder error (attempt %d), retrying after %.1fs: %s", attempt, delay, e)
+            await asyncio.sleep(delay)
+            delay *= 2
+    return None
+
+
 class IndexBundle:
     def __init__(self, faiss_index, chunks: list[Chunk], embedding_model: str):
         self.faiss_index = faiss_index
@@ -133,10 +150,14 @@ async def build_or_update_index(
                 if c.id not in reuse_vectors:
                     chunks_to_embed.append(c)
 
-    # 嵌入未命中
+    # 嵌入未命中（带 3 次重试，失败时直接抛出由 lifespan 降级处理）
     if chunks_to_embed:
         texts = [_embed_text_for_chunk(c) for c in chunks_to_embed]
-        vecs = await embedder.embed(texts)
+        vecs = await _embed_with_retry(embedder, texts)
+        if vecs is None:
+            raise RuntimeError(
+                f"Embedding failed for {len(chunks_to_embed)} chunks after retries"
+            )
         for c, v in zip(chunks_to_embed, vecs):
             reuse_vectors[c.id] = v
 
