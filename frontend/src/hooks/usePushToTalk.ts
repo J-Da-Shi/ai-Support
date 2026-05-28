@@ -73,7 +73,20 @@ export function usePushToTalk({
         }
       };
       rec.onerror = (ev) => {
-        onError(`语音识别失败：${ev.error}`);
+        const friendly: Record<string, string> = {
+          "not-allowed":
+            "麦克风权限被拒。检查：① Chrome 站点权限 chrome://settings/content/microphone ② macOS 系统设置 → 隐私 → 麦克风 + 语音识别（两个都要给 Chrome）",
+          "service-not-allowed":
+            "Chrome 的 Web Speech 服务被禁用。换成 Edge 试试，或在 chrome://flags 搜 'speech' 启用",
+          "network":
+            "Chrome Web Speech 需要联网（实际走 Google 服务），网络受限时会失败。可改用文字输入",
+          "no-speech": "没有检测到语音，请说话后再松开",
+          "audio-capture": "麦克风不可用或被其它应用占用",
+          "aborted": "录音被中断",
+        };
+        const msg =
+          friendly[ev.error] ?? `语音识别失败：${ev.error}${ev.message ? ` - ${ev.message}` : ""}`;
+        onError(msg);
       };
       rec.onend = () => {
         const text = finalTextRef.current.trim();
