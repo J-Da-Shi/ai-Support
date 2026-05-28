@@ -243,9 +243,11 @@ def main():
                 p.unlink()
 
     embedder = OpenAIEmbedder(
-        api_key=settings.openai_api_key,
+        api_key=settings.effective_embedding_key,
         model=settings.embedding_model,
         cache_path=data_dir / "embedding_cache.json",
+        base_url=settings.embedding_base_url or None,
+        batch_size=settings.embedding_batch_size,
     )
 
     bundle = asyncio.run(build_or_update_index(

@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
             model=settings.embedding_model,
             cache_path=data_dir / "embedding_cache.json",
             base_url=settings.embedding_base_url or None,
+            batch_size=settings.embedding_batch_size,
         )
         bundle = load_index(data_dir)
         if bundle is None or not bundle.chunks:

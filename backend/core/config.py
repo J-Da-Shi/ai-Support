@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     # 模型
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 0              # 0 = 自动推断；阿里 v4 可指定
+    embedding_batch_size: int = 100     # 阿里 v4 上限 10；OpenAI 可 100+
     llm_provider: str = "deepseek"      # deepseek | openai | claude
     llm_model: str = "deepseek-chat"
     asr_provider: str = "browser"       # browser (Web Speech) | openai (Whisper)
