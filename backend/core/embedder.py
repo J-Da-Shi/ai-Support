@@ -21,6 +21,7 @@ class OpenAIEmbedder:
         model: str,
         cache_path: Path,
         batch_size: int = 100,
+        base_url: str | None = None,
         _client=None,
     ):
         self.model = model
@@ -32,7 +33,13 @@ class OpenAIEmbedder:
                 self._cache = json.loads(cache_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 self._cache = {}
-        self._client = _client or AsyncOpenAI(api_key=api_key).embeddings
+        if _client is not None:
+            self._client = _client
+        else:
+            kwargs: dict = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            self._client = AsyncOpenAI(**kwargs).embeddings
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         results: list[list[float] | None] = [None] * len(texts)
