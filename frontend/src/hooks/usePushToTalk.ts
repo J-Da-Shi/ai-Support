@@ -4,6 +4,7 @@ interface Options {
   onTranscript: (text: string) => void;
   onError: (msg: string) => void;
   hotkey?: string; // 例如 "Space"
+  lang?: string; // 例如 "zh-CN"
 }
 
 function errMsg(e: unknown): string {
@@ -16,51 +17,87 @@ function errMsg(e: unknown): string {
   }
 }
 
-export function usePushToTalk({ onTranscript, onError, hotkey = "Space" }: Options) {
-  const [recording, setRecording] = useState(false);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
+interface SpeechRecognitionLike {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: ((ev: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((ev: { error: string; message?: string }) => void) | null;
+  onend: (() => void) | null;
+}
 
-  const start = useCallback(async () => {
-    if (recorderRef.current) return;
+interface SpeechRecognitionEventLike {
+  results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> & {
+    length: number;
+  };
+}
+
+function getRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
+  const w = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+export function usePushToTalk({
+  onTranscript,
+  onError,
+  hotkey = "Space",
+  lang = "zh-CN",
+}: Options) {
+  const [recording, setRecording] = useState(false);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const finalTextRef = useRef<string>("");
+
+  const start = useCallback(() => {
+    if (recognitionRef.current) return;
+    const Ctor = getRecognitionCtor();
+    if (!Ctor) {
+      onError("当前浏览器不支持语音识别（请用 Chrome / Edge）");
+      return;
+    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const rec = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      rec.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        const fd = new FormData();
-        fd.append("file", blob, "voice.webm");
-        try {
-          const resp = await fetch("/api/asr", { method: "POST", body: fd });
-          if (!resp.ok) throw new Error(`ASR ${resp.status}`);
-          const j = await resp.json();
-          onTranscript(j.text || "");
-        } catch (e: unknown) {
-          onError(`语音识别失败：${errMsg(e)}`);
-        } finally {
-          streamRef.current?.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-          recorderRef.current = null;
-          setRecording(false);
+      const rec = new Ctor();
+      rec.lang = lang;
+      rec.continuous = true;
+      rec.interimResults = false;
+      finalTextRef.current = "";
+      rec.onresult = (ev) => {
+        for (let i = 0; i < ev.results.length; i++) {
+          const r = ev.results[i];
+          if (r.isFinal) finalTextRef.current += r[0].transcript;
         }
       };
-      recorderRef.current = rec;
+      rec.onerror = (ev) => {
+        onError(`语音识别失败：${ev.error}`);
+      };
+      rec.onend = () => {
+        const text = finalTextRef.current.trim();
+        recognitionRef.current = null;
+        setRecording(false);
+        if (text) onTranscript(text);
+      };
+      recognitionRef.current = rec;
       rec.start();
       setRecording(true);
     } catch (e: unknown) {
-      onError(`无法访问麦克风：${errMsg(e)}`);
+      onError(`启动语音识别出错：${errMsg(e)}`);
+      recognitionRef.current = null;
+      setRecording(false);
     }
-  }, [onTranscript, onError]);
+  }, [onTranscript, onError, lang]);
 
   const stop = useCallback(() => {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        /* ignore */
+      }
     }
   }, []);
 
