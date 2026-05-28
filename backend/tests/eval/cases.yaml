@@ -1,0 +1,18 @@
+- query: "MySQL 事务隔离级别有哪些"
+  expected_mode: hit
+  expected_files_contain: ["mysql/事务隔离.md"]
+
+- query: "RR 和 RC 的区别"
+  expected_mode: hit
+  expected_files_contain: ["mysql/事务隔离.md"]
+
+- query: "controller-runtime 的 Reconcile 是什么"
+  expected_mode: hit
+  expected_files_contain: ["k8s/controller-runtime.md"]
+
+- query: "你们订单系统怎么做幂等"
+  expected_mode: hit
+  expected_files_contain: ["项目/订单系统复盘.md"]
+
+- query: "你对 Rust 的看法"
+  expected_mode: fallback
